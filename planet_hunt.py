@@ -46,9 +46,11 @@ def find_transit_period(vx, vy):
     # TODO: Fix that.  That's gotta get fixed.
     P = (last_trans - first_trans) / (valley_count - 1)
     print("First stab at P: {}".format(P))
+    """
     diffs = strip_outliers(diffs)
     P = np.mean(diffs)
     print("Second stab at P: {}".format(P))
+    """
 
     for d in diffs:
         if d > P:
@@ -89,27 +91,27 @@ def phase_shift(first_transit_time, origx, origy, P):
 # comment at end of line indicates values of 'percentile' to pass to
 # find_transit_valley(...) that works.
 # TODO: Figure that out automatically
-_, allx, ally = np.loadtxt('data/KIC006922244.tbl', unpack=True, skiprows=3) # 3
-_, allx, ally = np.loadtxt('data/KIC008359498.tbl', unpack=True, skiprows=3) # 3
-_, allx, ally = np.loadtxt('data/KIC002571238.tbl', unpack=True, skiprows=3) # 0.5
-_, allx, ally = np.loadtxt('data/KIC007950644.tbl', unpack=True, skiprows=3) # 0.5
-_, allx, ally = np.loadtxt('data/KIC009631995.tbl', unpack=True, skiprows=3) # 0.5
+"""
+_, allx, ally = np.loadtxt('data/KIC002571238.tbl', unpack=True, skiprows=3)  # 0.5
+"""
+_, allx, ally = np.loadtxt('data/KIC007950644.tbl', unpack=True, skiprows=3)  # 0.5
+_, allx, ally = np.loadtxt('data/KIC009631995.tbl', unpack=True, skiprows=3)  # 0.5
 """
 
 # Not working yet.
 """
 # I think this one is a triple system or binary in resonance
 .... or I'm a doof that doesn't understand the data.  All possible.
+_, allx, ally = np.loadtxt('data/KIC006922244.tbl', unpack=True, skiprows=3)  # 3
+_, allx, ally = np.loadtxt('data/KIC008359498.tbl', unpack=True, skiprows=3)  # 3
 _, allx, ally = np.loadtxt('data/KIC005881688.tbl', unpack=True, skiprows=3)
-"""
 _, allx, ally = np.loadtxt('data/KIC010418224.tbl', unpack=True, skiprows=3)
-"""
 _, allx, ally = np.loadtxt('data/KIC011853905.tbl', unpack=True, skiprows=3)
 """
 
-valley_x, valley_y = find_transit_valley(allx, ally, 2.5)
+valley_x, valley_y = find_transit_valley(allx, ally, 0.5)  # <-- magic % value
 show_valley_graph = False
-if show_valley_graph:
+if show_valley_graph:  # A debbuging graph showing where we think transits are
     plt.scatter(allx, ally, s=1)
     plt.scatter(valley_x, valley_y, s=3)
     plt.xlabel("Julian Days")
@@ -120,8 +122,8 @@ if show_valley_graph:
 P = find_transit_period(valley_x, valley_y)
 allx, ally = phase_shift(valley_x, allx, ally, P)
 
-# Take a running mean of each list
-N = 551
+# Take a running mean of N size for each list
+N = 551  # <-- magic number found via fiddling
 meanx = np.convolve(allx, np.ones((N,))/N, mode='valid')[(N-1):]
 meany = np.convolve(ally, np.ones((N,))/N, mode='valid')[(N-1):]
 
