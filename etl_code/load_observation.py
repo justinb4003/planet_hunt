@@ -9,7 +9,9 @@ DATA_DIR = "/mnt/bigdata/jbuist/kepler/"
 k_conn = pg.connect(user='kuser', password='kpass',
                     host='localhost', database='kepler')
 
-k_conn.cursor().execute('TRUNCATE TABLE observation')
+# Uncomment once the table is created and you, for whatever reason
+# want to truncate it when it's time to reload data.
+# k_conn.cursor().execute('TRUNCATE TABLE observation')
 
 # for f in ['kplr001025986_q1_q17_dr25_tce_01_dvt_lc.tbl']:
 for f in os.listdir(DATA_DIR):
@@ -49,6 +51,10 @@ for f in os.listdir(DATA_DIR):
     # Now turn out python structures into something petl can work with
     stbl = etl.fromcolumns([kepid_data, time_data, lc_data],
                            header=['kepler_id', 'time_val', 'lc_init'])
+
+    # Run with this method the first time through to have it automatically
+    # create the target schema for you.
+    # etl.todb(stbl, k_conn, 'observation', create=True)
     etl.appenddb(stbl, k_conn, 'observation')
 
 k_conn.close()
