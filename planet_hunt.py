@@ -48,7 +48,7 @@ def find_transit_valley(x, y, percentile):
     valley_y = []
     if len(valleys) > 1:
         thresh = np.percentile(y, percentile)
-        print("Threshold: {}".format(thresh))
+        # print("Threshold: {}".format(thresh))
         # There's a way to do this with list expressions; speedier that way
         good_valleys = []
         for idx in valleys:
@@ -58,10 +58,10 @@ def find_transit_valley(x, y, percentile):
         valley_x = x[good_valleys]
         valley_y = y[good_valleys]
     else:
-        # Should pick up othe techniques here. At least log when we only
+        # Should pick up other techniques here. At least log when we only
         # get one.  That should be a fun exercise.
-        print("Only found {} valleys in data. "
-              "Cannot proceed.".format(len(valleys)))
+        # print("Only found {} valleys in data. "
+        #       "Cannot proceed.".format(len(valleys)))
         pass
 
     return valley_x, valley_y
@@ -86,7 +86,7 @@ def find_transit_period(vx, vy):
     # there are gaps are longer than the periods of obvservation.
     # TODO: Fix that.  That's gotta get fixed.
     P = (last_trans - first_trans) / (valley_count - 1)
-    print("First stab at P: {}".format(P))
+    # print("First stab at P: {}".format(P))
     """
     diffs = strip_outliers(diffs)
     P = np.mean(diffs)
@@ -102,12 +102,12 @@ def find_transit_period(vx, vy):
             # print("Adding {} valleys due to gap".format(vcount))
             valley_count += vcount
 
-    print("First transit: {}, Last transit (in sample): {}".format(first_trans,
-                                                                   last_trans))
-    print("Valleys found: {}".format(valley_count))
+    # print("First transit: {}, "
+    #       "Last transit (in sample): {}".format(first_trans, last_trans))
+    # print("Valleys found: {}".format(valley_count))
     # Now we get a real solid estimate of the period value
     P = (last_trans - first_trans) / (valley_count - 1)
-    print("Period: {}".format(P))
+    # print("Period: {}".format(P))
     return P
 
 
@@ -147,18 +147,17 @@ def load_kepid_from_db(kepid):
     for row in rs:
         allx.append(row.time_val)
         ally.append(row.lc_init)
-    print(len(allx), len(ally))
     return allx, ally
 
 
-def calculate_result(kepid, percentile, show_valley=False, show_result=False):
+def calculate_result(kepid, allx, ally, percentile, show_valley=False,
+                     show_result=False):
     """
     kepid: Kepler Object ID (star) that we're looking at.
     percentile: Kind of a magic number at this point, generally 0.5-3%
                 is where we make the threshold for a valley being legit
     TODO: This only looks for a single object, the largest one.
     """
-    allx, ally = load_kepid_from_db(kepid)
     valley_x, valley_y = find_transit_valley(allx, ally, percentile)
 
     if show_valley:  # A debbuging graph showing where we think transits are
@@ -172,7 +171,7 @@ def calculate_result(kepid, percentile, show_valley=False, show_result=False):
         P = find_transit_period(valley_x, valley_y)
         allx, ally = phase_shift(valley_x[0], allx, ally, P)
     else:
-        print("Not attempting phase shift, no period detected.")
+        # print("Not attempting phase shift, no period detected.")
         P = -1  # Bogus return value
 
     # Take a running mean of N size for each list
@@ -196,7 +195,6 @@ def get_accepted_result_from_file(kepid):
     df = pd.read_csv(get_answer_filename(), skiprows=31)
     df = df.set_index('kepid')
     ap = df.loc[kepid]['koi_period']
-    print("ap: {}".format(ap))
     return ap
 
 
@@ -211,12 +209,43 @@ def get_accepted_result_from_db(kepid):
     return P
 
 
-# 10485250 is the DB test case to use.
-# 2571238 is the flat-file test case to use.
-db_test = 10485250
-file_test = 2571238
-target_kepid = db_test
-p1 = calculate_result(target_kepid, 0.5, show_valley=True, show_result=True)
-real_p1 = get_accepted_result_from_db(target_kepid)
-diff = abs(real_p1 - p1)
-print("Error in period: {}".format(diff))
+def main_simple_test():
+    # 10485250 is the DB test case to use.
+    # 2571238 is the flat-file test case to use.
+    db_test = 10485250
+    file_test = 2571238
+    target_kepid = db_test
+
+    allx, ally = load_kepid_from_db(target_kepid)
+    p1 = calculate_result(target_kepid, allx, ally, 0.5,
+                          show_valley=True, show_result=True)
+    real_p1 = get_accepted_result_from_db(target_kepid)
+    diff = abs(real_p1 - p1)
+    print("Error in period: {}".format(diff))
+
+
+def main_batch_test():
+    rt = get_result_tbl()
+    test_case_qry = sa.select([rt]).order_by(rt.c.koi_period)
+    # Sorting by period makes as much sense as any to me.
+    with sa_engine.connect() as cur:
+        rs = cur.execute(test_case_qry).fetchall()
+
+    for test_row in rs:
+        kepid = test_row.kepid
+        actual_period = test_row.koi_period
+
+        # Now get observation data
+        obsx, obsy = load_kepid_from_db(kepid)
+        if len(obsx) == 0:
+            continue  # Skip, we have no data.
+        else:
+            p1 = calculate_result(kepid, obsx, obsy, 0.5)
+            diff = abs(actual_period - p1)
+            print("kepler_id {} "
+                  "period calc {} "
+                  "off by {}".format(kepid, p1, diff))
+
+
+if __name__ == '__main__':
+    main_batch_test()
