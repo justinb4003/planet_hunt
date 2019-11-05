@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-import sys
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -96,29 +95,6 @@ def phase_shift(first_transit_time, origx, origy, P):
     return newx, newy
 
 
-# Solid cases
-"""
-# comment at end of line indicates values of 'percentile' to pass to
-# find_transit_valley(...) that works.
-# TODO: Figure that out automatically
-"""
-"""
-_, allx, ally = np.loadtxt('data/KIC007950644.tbl', unpack=True, skiprows=3)  # 0.5
-_, allx, ally = np.loadtxt('data/KIC009631995.tbl', unpack=True, skiprows=3)  # 0.5
-"""
-
-# Not working yet.
-"""
-# I think this one is a triple system or binary in resonance
-.... or I'm a doof that doesn't understand the data.  All possible.
-_, allx, ally = np.loadtxt('data/KIC006922244.tbl', unpack=True, skiprows=3)  # 3
-_, allx, ally = np.loadtxt('data/KIC008359498.tbl', unpack=True, skiprows=3)  # 3
-_, allx, ally = np.loadtxt('data/KIC005881688.tbl', unpack=True, skiprows=3)
-_, allx, ally = np.loadtxt('data/KIC010418224.tbl', unpack=True, skiprows=3)
-_, allx, ally = np.loadtxt('data/KIC011853905.tbl', unpack=True, skiprows=3)
-"""
-
-
 def calculate_result(kepid, percentile, show_valley=False, show_result=False):
     """
     kepid: Kepler Object ID (star) that we're looking at.
@@ -151,7 +127,6 @@ def calculate_result(kepid, percentile, show_valley=False, show_result=False):
     if show_result:
         plt.scatter(allx, ally, s=1)
         plt.plot(meanx, meany, "m")
-        # plt.scatter(valley_x, valley_y, marker='o', color='green', label='Valleys')
         plt.xlabel("Julian Days")
         plt.ylabel("Lc Intensity")
         plt.show()
@@ -167,7 +142,10 @@ def get_accepted_result(kepid):
     return ap
 
 
-p1 = calculate_result(2571238, 0.5, show_valley=False, show_result=False)
-real_p1 = get_accepted_result(2571238)
+# 10485250 is the DB test case to use.
+# 2571238 is the flat-file test case to use.
+target_kepid = 10485250
+p1 = calculate_result(target_kepid, 0.5, show_valley=False, show_result=False)
+real_p1 = get_accepted_result(target_kepid)
 diff = abs(real_p1 - p1)
 print("Error in period: {}".format(diff))
