@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import sys
 import numpy as np
 import pandas as pd
 import sqlalchemy as sa
@@ -42,6 +43,8 @@ def get_result_tbl():
 # .... obviously there's a better stats method to go about narrowing
 # this down.
 def find_transit_valley(x, y, percentile):
+    # TODO: Distance might need to be scaled down to find smaller periods
+    # 10 works for 3.ish days it seems
     valleys = find_peaks(y*-1, distance=10)[0]
 
     valley_x = []
@@ -138,6 +141,7 @@ def load_kepid_from_db(kepid):
     ot = get_observation_tbl()
     where = ot.c.kepler_id == kepid
     oq = sa.select([ot]).where(where)
+    # print("looking for obs on {}".format(kepid))
     with sa_engine.connect() as cur:
         rs = cur.execute(oq).fetchall()
 
@@ -247,5 +251,33 @@ def main_batch_test():
                   "off by {}".format(kepid, p1, diff))
 
 
+def command_line_main():
+    import argparse
+    p = argparse.ArgumentParser(description='Kepler data analyzer')
+    p.add_argument('--kepid', type=int, help='Kepler ID (int) of system')
+    config = p.parse_args()
+
+    kepid = config.kepid
+    obsx, obxy = load_kepid_from_db(kepid)
+    actual_period = get_accepted_result_from_db(kepid)
+    print("Target period: {}".format(actual_period))
+    if len(obsx) == 0:
+        print("No observation data found for {}".format(kepid))
+        sys.exit(-1)
+    
+    p1 = calculate_result(kepid, obsx, obxy, 3.0,
+                          show_valley=True,
+                          show_result=True)
+    diff = abs(actual_period - p1)
+    print("kepler_id {} "
+          "period calc {} "
+          "off by {}".format(kepid, p1, diff))
+
+
 if __name__ == '__main__':
-    main_batch_test()
+    if len(sys.argv) > 1:
+        print("Command line executing.")
+        command_line_main()
+    else:
+        print("Batch mode executing.")
+        main_batch_test()
