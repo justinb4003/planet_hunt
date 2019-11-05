@@ -2,19 +2,40 @@
 
 import numpy as np
 import pandas as pd
+import sqlalchemy as sa
 import matplotlib.pyplot as plt
 from scipy.signal import find_peaks
 from math import ceil
 # from scipy.signal import argrelextrema
 
+# Sloppy global DB connection stuff here.
+sa_engine = sa.create_engine(
+                'postgresql+psycopg2://kuser:kpass@localhost/kepler')
+metadata = sa.MetaData()
 
+
+# DEAD CODE: Original filename version left intact for a bit
 def get_answer_filename():
     return 'kepler_accepted_results.csv'
 
 
+# DEAD CODE: Original filename version left intact for a bit
 def get_datafile_filename(kepid):
     kepstr = '{:09d}'.format(kepid)
     return 'data/KIC{}.tbl'.format(kepstr)
+
+
+def get_sa_table(tblname):
+    tbl = sa.Table(tblname, metadata, autoload=True, autoload_with=sa_engine)
+    return tbl
+
+
+def get_observation_tbl():
+    return get_sa_table('observation')
+
+
+def get_result_tbl():
+    return get_sa_table('nasa_result')
 
 
 # PROBLEM:  Having to futz with this percentile between runs
@@ -22,16 +43,27 @@ def get_datafile_filename(kepid):
 # this down.
 def find_transit_valley(x, y, percentile):
     valleys = find_peaks(y*-1, distance=10)[0]
-    thresh = np.percentile(y, percentile)
-    print("Threshold: {}".format(thresh))
-    # There's a way to do this with list expressions; speedier that way
-    good_valleys = []
-    for idx in valleys:
-        lum = y[idx]
-        if lum < thresh:  # Dim enough to be a real valley
-            good_valleys.append(idx)
-    valley_x = x[good_valleys]
-    valley_y = y[good_valleys]
+
+    valley_x = []
+    valley_y = []
+    if len(valleys) > 1:
+        thresh = np.percentile(y, percentile)
+        print("Threshold: {}".format(thresh))
+        # There's a way to do this with list expressions; speedier that way
+        good_valleys = []
+        for idx in valleys:
+            lum = y[idx]
+            if lum < thresh:  # Dim enough to be a real valley
+                good_valleys.append(idx)
+        valley_x = x[good_valleys]
+        valley_y = y[good_valleys]
+    else:
+        # Should pick up othe techniques here. At least log when we only
+        # get one.  That should be a fun exercise.
+        print("Only found {} valleys in data. "
+              "Cannot proceed.".format(len(valleys)))
+        pass
+
     return valley_x, valley_y
 
 
@@ -95,6 +127,30 @@ def phase_shift(first_transit_time, origx, origy, P):
     return newx, newy
 
 
+def load_kepid_from_file(kepid):
+    _, allx, ally = np.loadtxt(get_datafile_filename(kepid),
+                               unpack=True,
+                               skiprows=3)
+    return allx, ally
+
+
+def load_kepid_from_db(kepid):
+    ot = get_observation_tbl()
+    where = ot.c.kepler_id == kepid
+    oq = sa.select([ot]).where(where)
+    with sa_engine.connect() as cur:
+        rs = cur.execute(oq).fetchall()
+
+    # Reformat data in a very non-python way
+    allx = []
+    ally = []
+    for row in rs:
+        allx.append(row.time_val)
+        ally.append(row.lc_init)
+    print(len(allx), len(ally))
+    return allx, ally
+
+
 def calculate_result(kepid, percentile, show_valley=False, show_result=False):
     """
     kepid: Kepler Object ID (star) that we're looking at.
@@ -102,9 +158,7 @@ def calculate_result(kepid, percentile, show_valley=False, show_result=False):
                 is where we make the threshold for a valley being legit
     TODO: This only looks for a single object, the largest one.
     """
-    _, allx, ally = np.loadtxt(get_datafile_filename(kepid),
-                               unpack=True,
-                               skiprows=3)
+    allx, ally = load_kepid_from_db(kepid)
     valley_x, valley_y = find_transit_valley(allx, ally, percentile)
 
     if show_valley:  # A debbuging graph showing where we think transits are
@@ -114,8 +168,12 @@ def calculate_result(kepid, percentile, show_valley=False, show_result=False):
         plt.ylabel("Lc Intensity")
         plt.show()
 
-    P = find_transit_period(valley_x, valley_y)
-    allx, ally = phase_shift(valley_x[0], allx, ally, P)
+    if len(valley_x) > 0:
+        P = find_transit_period(valley_x, valley_y)
+        allx, ally = phase_shift(valley_x[0], allx, ally, P)
+    else:
+        print("Not attempting phase shift, no period detected.")
+        P = -1  # Bogus return value
 
     # Take a running mean of N size for each list
     N = 551  # <-- magic number found via fiddling
@@ -134,7 +192,7 @@ def calculate_result(kepid, percentile, show_valley=False, show_result=False):
     return P
 
 
-def get_accepted_result(kepid):
+def get_accepted_result_from_file(kepid):
     df = pd.read_csv(get_answer_filename(), skiprows=31)
     df = df.set_index('kepid')
     ap = df.loc[kepid]['koi_period']
@@ -142,10 +200,23 @@ def get_accepted_result(kepid):
     return ap
 
 
+def get_accepted_result_from_db(kepid):
+    rt = get_result_tbl()
+    where = rt.c.kepid == kepid
+    rq = sa.select([rt]).where(where)
+    P = None
+    with sa_engine.connect() as cur:
+        row = cur.execute(rq).fetchone()
+        P = row.koi_period
+    return P
+
+
 # 10485250 is the DB test case to use.
 # 2571238 is the flat-file test case to use.
-target_kepid = 10485250
-p1 = calculate_result(target_kepid, 0.5, show_valley=False, show_result=False)
-real_p1 = get_accepted_result(target_kepid)
+db_test = 10485250
+file_test = 2571238
+target_kepid = db_test
+p1 = calculate_result(target_kepid, 0.5, show_valley=True, show_result=True)
+real_p1 = get_accepted_result_from_db(target_kepid)
 diff = abs(real_p1 - p1)
 print("Error in period: {}".format(diff))
