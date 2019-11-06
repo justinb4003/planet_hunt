@@ -5,14 +5,18 @@ import numpy as np
 import pandas as pd
 import sqlalchemy as sa
 import matplotlib.pyplot as plt
-from scipy.signal import find_peaks
-from math import ceil
-# from scipy.signal import argrelextrema
+
+from math import ceil, isnan
+from collections import namedtuple
+from scipy.signal import find_peaks, find_peaks_cwt, argrelextrema
+from scipy import signal
 
 # Sloppy global DB connection stuff here.
 sa_engine = sa.create_engine(
                 'postgresql+psycopg2://kuser:kpass@localhost/kepler')
 metadata = sa.MetaData()
+
+NASAResult = namedtuple('NASAResult', 'kepoi_name kepler_name period')
 
 
 # DEAD CODE: Original filename version left intact for a bit
@@ -43,28 +47,51 @@ def get_result_tbl():
 # .... obviously there's a better stats method to go about narrowing
 # this down.
 def find_transit_valley(x, y, percentile):
+    # Cut a median through the graph.
+    # filter out the X and Y based only on Y
+    # ... really should look at Pandas for this.
+    # ytarget = np.median(y)
+    # print("max y will be: {}".format(ytarget))
+    # Ehh... that's always going to be 0 or should be since this data isnt'
+    # raw.. anyway...
+    ytarget = 0.00
+    x, y = zip(*[(i, j) for i, j in zip(x, y) if j <= ytarget])
+
+    if False:
+        xcutline = [0, max(x)]
+        ycutline = [ytarget, ytarget]
+        plt.scatter(x, y, s=1)
+        plt.plot(xcutline, ycutline, "m")
+        plt.xlabel("Julian Days")
+        plt.ylabel("Lc Intensity")
+        plt.show()
+
     # TODO: Distance might need to be scaled down to find smaller periods
     # 10 works for 3.ish days it seems
-    valleys = find_peaks(y*-1, distance=10)[0]
+    # valleys = find_peaks(y*-1, distance=2)[0]
+    # valleys = find_peaks_cwt(y*-1, np.arange(1, 10))[0]
+    valleys = argrelextrema(np.array(y), np.less, order=5)[0].tolist()
 
     valley_x = []
     valley_y = []
     if len(valleys) > 1:
         thresh = np.percentile(y, percentile)
-        # print("Threshold: {}".format(thresh))
+        print("Threshold: {}".format(thresh))
         # There's a way to do this with list expressions; speedier that way
         good_valleys = []
         for idx in valleys:
             lum = y[idx]
             if lum < thresh:  # Dim enough to be a real valley
                 good_valleys.append(idx)
-        valley_x = x[good_valleys]
-        valley_y = y[good_valleys]
+        # valley_x = x[good_valleys]
+        # valley_y = y[good_valleys]
+        valley_x = [x[i] for i in good_valleys]
+        valley_y = [y[i] for i in good_valleys]
     else:
         # Should pick up other techniques here. At least log when we only
         # get one.  That should be a fun exercise.
-        # print("Only found {} valleys in data. "
-        #       "Cannot proceed.".format(len(valleys)))
+        print("Only found {} valleys in data. "
+              "Cannot proceed.".format(len(valleys)))
         pass
 
     return valley_x, valley_y
@@ -117,7 +144,7 @@ def find_transit_period(vx, vy):
 # Shift every X back in time until it's relative position to transition always
 # puts peak transition at time = 0.000
 def phase_shift(first_transit_time, origx, origy, P):
-    origx -= first_transit_time
+    origx = [x - first_transit_time for x in origx]
     newx = []
     for i in origx:
         # Guarantee I'm doing something stupid here, not seeing it because I'm
@@ -149,8 +176,9 @@ def load_kepid_from_db(kepid):
     allx = []
     ally = []
     for row in rs:
-        allx.append(row.time_val)
-        ally.append(row.lc_init)
+        if isnan(row.lc_init) is False:
+            allx.append(float(row.time_val))
+            ally.append(float(row.lc_init))
     return allx, ally
 
 
@@ -164,11 +192,12 @@ def calculate_result(kepid, allx, ally, percentile, show_valley=False,
     """
     valley_x, valley_y = find_transit_valley(allx, ally, percentile)
 
-    if show_valley:  # A debbuging graph showing where we think transits are
+    # A debbuging graph showing where we think transits are
+    if len(valley_x) > 0 and show_valley:
         plt.scatter(allx, ally, s=1)
-        plt.scatter(valley_x, valley_y, s=3)
+        plt.scatter(valley_x, valley_y, s=5)
         plt.xlabel("Julian Days")
-        plt.ylabel("Lc Intensity")
+        plt.ylabel("Lc Intensity with valley")
         plt.show()
 
     if len(valley_x) > 0:
@@ -206,26 +235,29 @@ def get_accepted_result_from_db(kepid):
     rt = get_result_tbl()
     where = rt.c.kepid == kepid
     rq = sa.select([rt]).where(where)
-    P = None
     with sa_engine.connect() as cur:
-        row = cur.execute(rq).fetchone()
-        P = row.koi_period
-    return P
+        rs = cur.execute(rq).fetchall()
+    ret = []
+    for row in rs:
+        res = NASAResult(row.kepoi_name, row.kepler_name, row.koi_period)
+        ret.append(res)
+    return ret
 
 
 def main_simple_test():
     # 10485250 is the DB test case to use.
     # 2571238 is the flat-file test case to use.
     db_test = 10485250
-    file_test = 2571238
+    file_test = 2571238  # noqa
     target_kepid = db_test
 
     allx, ally = load_kepid_from_db(target_kepid)
     p1 = calculate_result(target_kepid, allx, ally, 0.5,
                           show_valley=True, show_result=True)
-    real_p1 = get_accepted_result_from_db(target_kepid)
-    diff = abs(real_p1 - p1)
-    print("Error in period: {}".format(diff))
+    for r in get_accepted_result_from_db(target_kepid):
+        real_p1 = r.period
+        diff = abs(real_p1 - p1)
+        print("Error in period: {}".format(diff))
 
 
 def main_batch_test():
@@ -259,19 +291,21 @@ def command_line_main():
 
     kepid = config.kepid
     obsx, obxy = load_kepid_from_db(kepid)
-    actual_period = get_accepted_result_from_db(kepid)
-    print("Target period: {}".format(actual_period))
+    result_list = get_accepted_result_from_db(kepid)
+    for r in result_list:
+        print("Target period(s): {}".format(r.period))
     if len(obsx) == 0:
         print("No observation data found for {}".format(kepid))
         sys.exit(-1)
-    
+
     p1 = calculate_result(kepid, obsx, obxy, 3.0,
                           show_valley=True,
                           show_result=True)
-    diff = abs(actual_period - p1)
-    print("kepler_id {} "
-          "period calc {} "
-          "off by {}".format(kepid, p1, diff))
+    for r in result_list:
+        diff = abs(r.period - p1)
+        print("kepler_id {} "
+              "period calc {} "
+              "off by {}".format(kepid, p1, diff))
 
 
 if __name__ == '__main__':
