@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import wx
+import numpy as np
+import matplotlib as mp
 import sqlalchemy as sa
 
 from matplotlib.backends.backend_wxagg import FigureCanvasWxAgg as FigureCanvas
@@ -7,16 +9,23 @@ from matplotlib.backends.backend_wxagg import NavigationToolbar2WxAgg as Navigat
 from wx.lib.splitter import MultiSplitterWindow
 from matplotlib.figure import Figure
 from collections import namedtuple
+from math import isnan
 
 
 # BEGIN DATA ROUTINES ###
 sa_engine = sa.create_engine(
                 'postgresql+psycopg2://kuser:kpass@192.168.1.125/kepler')
 metadata = sa.MetaData()
-NASAResult = namedtuple('NASAResult', 'kepoi_name kepler_name period')
+NASAResult = namedtuple('NASAResult', 'kepoi_name kepler_name period '
+                                      'first_transit')
 
 OBJECT_X = []
 OBJECT_Y = []
+
+
+def running_mean(d, N):
+    cs = np.cumsum(np.insert(d, 0, 0))
+    return (cs[N:] - cs[:-N]) / float(N)
 
 
 def get_sa_table(tblname):
@@ -46,9 +55,9 @@ def load_kepler_id_from_db(kepid):
     y = []
     print("found {} records".format(len(rs)))
     for row in rs:
-        x.append(row.time_val)
-        y.append(row.lc_init)
-    print("now returning them.")
+        if not isnan(row.lc_init):
+            x.append(row.time_val)
+            y.append(row.lc_init)
     return x, y
 
 
@@ -60,7 +69,8 @@ def get_accepted_result_from_db(kepid):
         rs = cur.execute(rq).fetchall()
     ret = []
     for row in rs:
-        res = NASAResult(row.kepoi_name, row.kepler_name, row.koi_period)
+        res = NASAResult(row.kepoi_name, row.kepler_name, row.koi_period,
+                         row.koi_time0bk)
         ret.append(res)
     return ret
 
@@ -90,37 +100,58 @@ def phase_shift(first_transit_time, origx, origy, P):
 
 class DataSearchPanel(wx.Panel):
 
-    def __init__(self, parent, display_panel):
+    def __init__(self, parent, display_panel, modify_panel):
         wx.Panel.__init__(self, parent=parent)
         self.display_panel = display_panel
+        self.modify_panel = modify_panel
 
         hbox = wx.BoxSizer(wx.VERTICAL)
         self.kepid = wx.TextCtrl(self)
         bload = wx.Button(self, label='Load Kepler ID')
+
+        self.kepname = wx.StaticText(self)
+        self.result_period = wx.StaticText(self)
+        self.kepname.SetLabel('N/A')
+        self.result_period.SetLabel('0.00')
+
+        self.kepid.SetValue(str('6922244'))  # Nice dummy value
 
         hbox.Add(self.kepid, 0,
                  wx.ALIGN_CENTER_HORIZONTAL | wx.ALL | wx.EXPAND, 5)
         hbox.Add(bload, 0,
                  wx.ALIGN_CENTER_HORIZONTAL | wx.ALL | wx.EXPAND, 5)
         self.Bind(wx.EVT_BUTTON, self.load_data, bload)
+        hbox.Add(self.kepname, 0,
+                 wx.ALIGN_CENTER_HORIZONTAL | wx.ALL | wx.EXPAND, 5)
+        hbox.Add(self.result_period, 0,
+                 wx.ALIGN_CENTER_HORIZONTAL | wx.ALL | wx.EXPAND, 5)
         self.SetSizer(hbox)
 
     def load_data(self, event):
+        kepid = None
         try:
             kepid = int(self.kepid.GetValue())
         except ValueError:
             # BAD: Just shove a debug value in for now.
-            kepid = 5358624
+            # TODO: MsgBox
+            wx.MessageBox('Unable to read Kepler ID', 'Problem!',
+                          wx.OK | wx.ICON_INFORMATION)
 
-        print("hit load_data().: {}".format(kepid))
-        global OBJECT_X, OBJECT_Y
-        OBJECT_X, OBJECT_Y = load_kepler_id_from_db(kepid)
-        result_list = get_accepted_result_from_db(kepid)
-        for r in result_list:
-            print("Target period(s): {}".format(r.period))
+        if kepid is not None:
+            print("hit load_data().: {}".format(kepid))
+            global OBJECT_X, OBJECT_Y
+            OBJECT_X, OBJECT_Y = load_kepler_id_from_db(kepid)
+            result_list = get_accepted_result_from_db(kepid)
+            for r in result_list:
+                self.result_period.SetLabel(str(r.period))
+                self.kepname.SetLabel(str(r.kepler_name))
+                self.modify_panel.period.SetValue(str(r.period))
+                self.modify_panel.first_transit.SetValue(str(r.first_transit))
+                print("Target period(s): {}".format(r.period))
+                print("Target 0k(s): {}".format(r.first_transit))
 
-        self.display_panel.display_transit_raw(OBJECT_X, OBJECT_Y)
-        print("You should see the magic now.")
+            self.display_panel.display_transit_raw(OBJECT_X, OBJECT_Y)
+            print("You should see the magic now.")
 
 
 class DataDisplayPanel(wx.Panel):
@@ -144,7 +175,17 @@ class DataDisplayPanel(wx.Panel):
     def display_transit_raw(self, x, y):
         self.ax1.cla()
         self.ax1.scatter(x, y, s=1)
+        self.force_update()
+
+    def display_shifted(self, x, y, meanx, meany):
+        self.ax1.cla()
+        self.ax1.scatter(x, y, s=1)
+        self.ax1.plot(meanx, meany, 'm')
+        self.force_update()
+
+    def force_update(self):
         self.canvas.draw()
+        self.Layout()
 
 
 class DataModifyPanel(wx.Panel):
@@ -155,9 +196,12 @@ class DataModifyPanel(wx.Panel):
         self.SetSize((100, -1))
         hbox = wx.BoxSizer(wx.VERTICAL)
         self.period = wx.TextCtrl(self)
+        self.first_transit = wx.TextCtrl(self)
         papply_manual = wx.Button(self, label='Apply Period Shift')
 
         hbox.Add(self.period, 0,
+                 wx.ALIGN_CENTER_HORIZONTAL | wx.ALL | wx.EXPAND, 5)
+        hbox.Add(self.first_transit, 0,
                  wx.ALIGN_CENTER_HORIZONTAL | wx.ALL | wx.EXPAND, 5)
         hbox.Add(papply_manual, 0,
                  wx.ALIGN_CENTER_HORIZONTAL | wx.ALL | wx.EXPAND, 5)
@@ -166,25 +210,46 @@ class DataModifyPanel(wx.Panel):
 
     def apply_period_manual(self, event):
         global OBJECT_X, OBJECT_Y
-        # period = float(self.period.GetValue())
-        period = 3.52563
+        try:
+            ftrans = float(self.first_transit.GetValue())
+            period = float(self.period.GetValue())
+        except ValueError:
+            wx.MessageBox('Unable to read Transit/period value', 'Problem!',
+                          wx.OK | wx.ICON_INFORMATION)
+
         print("hit apply_period_manual().: {}".format(period))
-        x, y = phase_shift(0, OBJECT_X, OBJECT_Y, period)
-        self.display_panel.display_transit_raw(x, y)
-        print("scatter should be updated")
+        x, y = phase_shift(ftrans, OBJECT_X, OBJECT_Y, period)
+        # Take a running mean of N size for each list
+        N = 551  # <-- magic number found via fiddling
+        # meanx = np.convolve(x, np.ones((N,))/N, mode='valid')[(N-1):]
+        # meany = np.convolve(y, np.ones((N,))/N, mode='valid')[(N-1):]
+
+        meanx = running_mean(x, N)
+        meany = running_mean(y, N)
+
+        # self.display_panel.display_transit_raw(x, y)
+        # print(x)
+        # print(meanx)
+        # print(y)
+        # print(meany)
+        self.display_panel.display_shifted(x, y, meanx, meany)
+        print("scatter with mean should be updated")
 
 
 class MainWindow(wx.Frame):
 
     def __init__(self, parent, id):
-        wx.Frame.__init__(self, parent, id, 'Planet Hunt', size=(800, 600))
+        wx.Frame.__init__(self, parent, id, 'Planet Hunt', size=(1000, 600))
 
         splitter = MultiSplitterWindow(self, style=wx.SP_LIVE_UPDATE)
+        # The passing references to panels and controsl to each other
+        # seems a bit sloppy and I want to do away with it. Not sure how yet.
         data_display_panel = DataDisplayPanel(splitter)
-        data_search_panel = DataSearchPanel(splitter, data_display_panel)
         data_modify_panel = DataModifyPanel(splitter, data_display_panel)
+        data_search_panel = DataSearchPanel(splitter, data_display_panel,
+                                            data_modify_panel)
         splitter.AppendWindow(data_search_panel, sashPos=150)
-        splitter.AppendWindow(data_display_panel, sashPos=400)
+        splitter.AppendWindow(data_display_panel, sashPos=700)
         splitter.AppendWindow(data_modify_panel)
 
         status_bar = self.CreateStatusBar()
