@@ -43,11 +43,13 @@ def get_result_tbl():
 
 
 def load_kepler_id_from_db(kepid):
+    # TODO: Handle db reconnect if we timed out.
     print("loading {}".format(kepid))
     ot = get_observation_tbl()
     cols = [ot.c.time_val, ot.c.lc_init]
     where = ot.c.kepler_id == kepid
     qry = sa.select(cols).select_from(ot).where(where)
+    print(qry)
     with sa_engine.connect() as cur:
         rs = cur.execute(qry).fetchall()
     x = []
@@ -124,8 +126,8 @@ class DataSearchPanel(wx.Panel):
         self.first_transit.SetLabel('0.00')
         self.koi_disposition.SetLabel('N/A')
 
-        self.kepid.SetValue(str('10984090'))  # A binary system
-        # self.kepid.SetValue(str('6922244'))  # A single system
+        # self.kepid.SetValue(str('10984090'))  # A binary system
+        self.kepid.SetValue(str('6922244'))  # A single system
 
         hbox.Add(self.kepid, 0,
                  wx.ALIGN_CENTER_HORIZONTAL | wx.ALL | wx.EXPAND, 5)
@@ -217,9 +219,11 @@ class DataDisplayPanel(wx.Panel):
         self.force_update()
 
     def force_update(self):
+        global frame
         # TODO: This isn't always forcing a redraw on some of my computers.
         self.canvas.draw()
         self.Layout()
+        frame.force_update()
 
 
 class DataModifyPanel(wx.Panel):
@@ -271,16 +275,16 @@ class MainWindow(wx.Frame):
     def __init__(self, parent, id):
         wx.Frame.__init__(self, parent, id, 'Planet Hunt', size=(1400, 600))
 
-        splitter = MultiSplitterWindow(self, style=wx.SP_LIVE_UPDATE)
+        self.splitter = MultiSplitterWindow(self, style=wx.SP_LIVE_UPDATE)
         # The passing references to panels and controsl to each other
         # seems a bit sloppy and I want to do away with it. Not sure how yet.
-        data_display_panel = DataDisplayPanel(splitter)
-        data_modify_panel = DataModifyPanel(splitter, data_display_panel)
-        data_search_panel = DataSearchPanel(splitter, data_display_panel,
+        data_display_panel = DataDisplayPanel(self.splitter)
+        data_modify_panel = DataModifyPanel(self.splitter, data_display_panel)
+        data_search_panel = DataSearchPanel(self.splitter, data_display_panel,
                                             data_modify_panel)
-        splitter.AppendWindow(data_search_panel, sashPos=150)
-        splitter.AppendWindow(data_display_panel, sashPos=1050)
-        splitter.AppendWindow(data_modify_panel)
+        self.splitter.AppendWindow(data_search_panel, sashPos=150)
+        self.splitter.AppendWindow(data_display_panel, sashPos=1050)
+        self.splitter.AppendWindow(data_modify_panel)
 
         status_bar = self.CreateStatusBar()
         menubar_main = wx.MenuBar()
@@ -293,6 +297,14 @@ class MainWindow(wx.Frame):
         menubar_main.Append(edit_menu, 'Edit')
         self.SetMenuBar(menubar_main)
         self.SetStatusBar(status_bar)
+
+    def force_update(self):
+        # Jiggle the splitter 'sash' around to force a redraw.
+        # No, I don't like having to do this but I can't figure out the
+        # proper way to make the matplotlib graphs actually show up.
+        sp = self.splitter.GetSashPosition(0)
+        self.splitter.SetSashPosition(0, sp+1)
+        self.splitter.SetSashPosition(0, sp+0)
 
     def close_window(self, event):
         self.Destroy()
