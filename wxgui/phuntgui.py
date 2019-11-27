@@ -8,12 +8,18 @@ from matplotlib.backends.backend_wxagg import NavigationToolbar2WxAgg as Navigat
 from wx.lib.splitter import MultiSplitterWindow
 from matplotlib.figure import Figure
 from collections import namedtuple
+from astropy import units as u
+from astropy.timeseries import TimeSeries
+from astropy.timeseries import BoxLeastSquares
+from astropy.timeseries import LombScargle
+from contexttimer import Timer
+from datetime import datetime, timedelta
 from math import isnan
 
 
 # BEGIN DATA ROUTINES ###
 sa_engine = sa.create_engine(
-                'postgresql+psycopg2://kuser:kpass@192.168.1.125/kepler')
+                'postgresql+psycopg2://kuser:kpass@localhost/kepler')
 metadata = sa.MetaData()
 NASAResult = namedtuple('NASAResult', 'kepoi_name kepler_name period '
                                       'first_transit koi_disposition')
@@ -54,11 +60,50 @@ def load_kepler_id_from_db(kepid):
         rs = cur.execute(qry).fetchall()
     x = []
     y = []
+    ts_time = []
     print("found {} records".format(len(rs)))
-    for row in rs:
-        if not isnan(row.lc_init):
-            x.append(row.time_val)
-            y.append(row.lc_init)
+    with Timer(factor=1000) as t:
+        for row in rs:
+            if not isnan(row.lc_init):
+                # Noon 2009-01-01, the start date for kepler data
+                ts = datetime(2009, 1, 1, 12, 0, 0)
+                ts += timedelta(days=row.time_val)
+                ts_time.append(ts)
+                x.append(row.time_val)
+                y.append(row.lc_init)
+
+        print("{} to build arrays".format(t.elapsed))
+        # Do some astropy work here because it looks like a good spot
+        # Build astropy TimeSeries
+
+        ts = TimeSeries(time=ts_time)
+        print("{} to create TimeSeries".format(t.elapsed))
+        ts['lc_init'] = y
+        print("{} to add lc_init to TimeSeries".format(t.elapsed))
+        pg = BoxLeastSquares.from_timeseries(ts, 'lc_init')
+        print("{} BoxLeastSquares created from lc_init".format(t.elapsed))
+        # So painfully slow.  Not sure what math is going on behind it.
+        """
+        r = pg.autopower(0.2 * u.day, objective='snr')
+        print("{} autopower() finished".format(t.elapsed))
+        best = np.argmax(r.power)
+        print("{} argmax() finished".format(t.elapsed))
+        period = r.period[best]
+        """
+        # This gives me nothing useful... 
+        print("Starting LombScargle computation")
+        freq, power = LombScargle(x, y, fit_mean=True).autopower()
+        power, freq = zip(*sorted(zip(power, freq), reverse=True))
+        idx = np.argmax(power)
+        print("argmax index is {}".format(idx))
+        period = 1/freq[idx]
+        winpower = power[idx]
+        print("{} period looking done".format(t.elapsed))
+        print("Top 1 periods:")
+        for f, p in zip(freq[0:10], power[0:10]):
+            print("{} days power: {}".format(1/f, p))
+    print("Best period found: {}".format(period))
+    print("Best period power: {}".format(winpower))
     return x, y
 
 
@@ -311,6 +356,8 @@ class MainWindow(wx.Frame):
 
 
 if __name__ == '__main__':
+    load_kepler_id_from_db(6922244)
+    # 10984090 A binary system
     app = wx.App()
     frame = MainWindow(parent=None, id=-1)
     frame.Show()
