@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import wx
+import functools
 import numpy as np
 import sqlalchemy as sa
 
@@ -12,9 +13,21 @@ from astropy import units as u
 from astropy.timeseries import TimeSeries
 from astropy.timeseries import BoxLeastSquares
 from astropy.timeseries import LombScargle
-from contexttimer import Timer
 from datetime import datetime, timedelta
+from contexttimer import Timer
 from math import isnan
+
+
+# Goober Algo
+"""
+bin up data in chunks. Calcualte average point of bounding box, so center
+of it.  For everythign under the average distance from the center increase the
+box score.  Think of it like a heatmap of closeness to center.  The higher
+(hotter) the score the closer it all is.  Anything that is pulled away from
+the center will pull down the score into a negative value.
+
+Or that's how I'm visualizing it right now. - 2019-11-27
+"""
 
 
 # BEGIN DATA ROUTINES ###
@@ -49,6 +62,14 @@ def get_result_tbl():
 
 
 def load_kepler_id_from_db(kepid):
+    """
+    Returns a list of time and list of raw light cuve intensitity (lc_init)
+    readings from the Kepler observations.
+
+    Doesn't offer any filtering on which quarter to pull from.  Perhaps it
+    should. At the least that data should filter back to the UI somehow.
+    That will be something for me to expand on shortly.
+    """
     # TODO: Handle db reconnect if we timed out.
     print("loading {}".format(kepid))
     ot = get_observation_tbl()
@@ -60,54 +81,23 @@ def load_kepler_id_from_db(kepid):
         rs = cur.execute(qry).fetchall()
     x = []
     y = []
-    ts_time = []
+    ts_time = []  # Not currently used. :(
     print("found {} records".format(len(rs)))
-    with Timer(factor=1000) as t:
-        for row in rs:
-            if not isnan(row.lc_init):
-                # Noon 2009-01-01, the start date for kepler data
-                ts = datetime(2009, 1, 1, 12, 0, 0)
-                ts += timedelta(days=row.time_val)
-                ts_time.append(ts)
-                x.append(row.time_val)
-                y.append(row.lc_init)
-
-        print("{} to build arrays".format(t.elapsed))
-        # Do some astropy work here because it looks like a good spot
-        # Build astropy TimeSeries
-
-        ts = TimeSeries(time=ts_time)
-        print("{} to create TimeSeries".format(t.elapsed))
-        ts['lc_init'] = y
-        print("{} to add lc_init to TimeSeries".format(t.elapsed))
-        pg = BoxLeastSquares.from_timeseries(ts, 'lc_init')
-        print("{} BoxLeastSquares created from lc_init".format(t.elapsed))
-        # So painfully slow.  Not sure what math is going on behind it.
-        """
-        r = pg.autopower(0.2 * u.day, objective='snr')
-        print("{} autopower() finished".format(t.elapsed))
-        best = np.argmax(r.power)
-        print("{} argmax() finished".format(t.elapsed))
-        period = r.period[best]
-        """
-        # This gives me nothing useful... 
-        print("Starting LombScargle computation")
-        freq, power = LombScargle(x, y, fit_mean=True).autopower()
-        power, freq = zip(*sorted(zip(power, freq), reverse=True))
-        idx = np.argmax(power)
-        print("argmax index is {}".format(idx))
-        period = 1/freq[idx]
-        winpower = power[idx]
-        print("{} period looking done".format(t.elapsed))
-        print("Top 1 periods:")
-        for f, p in zip(freq[0:10], power[0:10]):
-            print("{} days power: {}".format(1/f, p))
-    print("Best period found: {}".format(period))
-    print("Best period power: {}".format(winpower))
+    for row in rs:
+        if not isnan(row.lc_init):
+            # Noon 2009-01-01, the start date for kepler data
+            ts = datetime(2009, 1, 1, 12, 0, 0)
+            ts += timedelta(days=row.time_val)
+            ts_time.append(ts)
+            x.append(row.time_val)
+            y.append(row.lc_init)
     return x, y
 
 
 def get_accepted_result_from_db(kepid):
+    """
+    Returns a list of the accepted NASA findings for a given Kepler ID
+    """
     rt = get_result_tbl()
     where = rt.c.kepid == kepid
     rq = sa.select([rt]).where(where)
@@ -120,15 +110,36 @@ def get_accepted_result_from_db(kepid):
         ret.append(res)
     return ret
 
+
+@functools.lru_cache(maxsize=1)
+def get_accepted_result_kepid_list():
+    """
+    Return an ordered list of every Kepler ID that we've got in our
+    NASA result set.  Useful if you want to page through that data which is
+    exactly what I'm going to do with it.
+    """
+    rt = get_result_tbl()
+    cols = [rt.c.kepid]
+    rq = sa.select(cols).select_from(rt).order_by(rt.c.kepid)
+    with sa_engine.connect() as cur:
+        rs = cur.execute(rq).fetchall()
+    ret = []
+    for row in rs:
+        ret.append(row.kepid)
+    return ret
+
+
 # END DATA ROUTINES ###
 
 
 # data manipulation #
 # TODO: Not sure where to put these yet
 
-# Shift every X back in time until it's relative position to transition always
-# puts peak transition at time = 0.000
 def phase_shift(first_transit_time, origx, origy, P):
+    """
+    Shift every X back in time until it's relative position to transition
+    always puts peak transition at time = 0.000
+    """
     origx = [x - first_transit_time for x in origx]
     newx = []
     for i in origx:
@@ -145,15 +156,43 @@ def phase_shift(first_transit_time, origx, origy, P):
 
 
 class DataSearchPanel(wx.Panel):
+    """
+    As implemented this is currently the leftmost panel in the system.
+
+    This is the panel that gives the user an ability to select a Kepler ID
+    and load it's stored data into memory for manipulation.  It also allows
+    selection of an object of interest found in the NASA data for presentation
+    to the user.  Also, as currently implemented that data is flung over into
+    other UI controls is an ugly fasion.  Not proud of it but it's an internal
+    tool only here.  Like I'm the only one using it.
+    """
 
     def __init__(self, parent, display_panel, modify_panel):
         wx.Panel.__init__(self, parent=parent)
         self.display_panel = display_panel
         self.modify_panel = modify_panel
+        self.curr_kepler_index = 0
 
         hbox = wx.BoxSizer(wx.VERTICAL)
         self.kepid = wx.TextCtrl(self)
         bload = wx.Button(self, label='Load Kepler ID')
+        abox = wx.BoxSizer(wx.HORIZONTAL)  # Sizer for the back/forward buttons
+        kback = wx.Button(self, label='<--')  # ASCII art 4 lyfe
+        kforw = wx.Button(self, label='-->')
+        """
+        abox.Add(kback, 0,
+                 wx.ALIGN_CENTER_HORIZONTAL | wx.ALL | wx.EXPAND, 5)
+        abox.Add(kforw, 0,
+                 wx.ALIGN_CENTER_HORIZONTAL | wx.ALL | wx.EXPAND, 5)
+        """
+        # The above block comment indicates I am not happy with how my ASCII
+        # art buttons are laying out inside the panel and so, I'm trying random
+        # stuff.
+        # This comment confirms that.
+        abox.Add(kback, 0, wx.ALIGN_CENTER_HORIZONTAL, 5)
+        abox.Add(kforw, 0, wx.ALIGN_CENTER_HORIZONTAL, 5)
+        self.Bind(wx.EVT_BUTTON, self.kep_back_press, kback)
+        self.Bind(wx.EVT_BUTTON, self.kep_forw_press, kforw)
 
         self.kep_choice_ddl = wx.ComboBox(self, -1, choices=[],
                                           style=wx.CB_READONLY)
@@ -179,6 +218,7 @@ class DataSearchPanel(wx.Panel):
         hbox.Add(bload, 0,
                  wx.ALIGN_CENTER_HORIZONTAL | wx.ALL | wx.EXPAND, 5)
         self.Bind(wx.EVT_BUTTON, self.load_data, bload)
+        hbox.Add(abox, 0)  # Add Arrow buttons
         hbox.Add(self.kep_choice_ddl, 0,
                  wx.ALIGN_CENTER_HORIZONTAL | wx.ALL | wx.EXPAND, 5)
         hbox.Add(self.kepoi_name, 0,
@@ -194,7 +234,6 @@ class DataSearchPanel(wx.Panel):
         self.SetSizer(hbox)
 
     def on_kep_choice(self, event):
-        print('fire')
         choice = self.kep_choice_ddl.GetValue()
         for r in [x for x in self.result_list if x.kepoi_name == choice]:
             self.kepoi_name.SetLabel(str(r.kepoi_name))
@@ -206,6 +245,23 @@ class DataSearchPanel(wx.Panel):
             self.modify_panel.first_transit.SetValue(str(r.first_transit))
             print("Target period(s): {}".format(r.period))
             print("Target 0k(s): {}".format(r.first_transit))
+
+    def set_kepid_from_index(self):
+        self.print_kep_idx()
+        keplist = get_accepted_result_kepid_list()
+        kepid = keplist[self.curr_kepler_index]
+        self.kepid.SetValue(str(kepid))
+
+    def kep_back_press(self, event):
+        self.curr_kepler_index -= 1
+        self.set_kepid_from_index()
+
+    def kep_forw_press(self, event):
+        self.curr_kepler_index += 1
+        self.set_kepid_from_index()
+
+    def print_kep_idx(self):
+        print(self.curr_kepler_index)
 
     def load_data(self, event):
         kepid = None
@@ -232,9 +288,18 @@ class DataSearchPanel(wx.Panel):
             # self.kep_choice_ddl.SetValue(kep_choice[0])
             self.display_panel.display_transit_raw(OBJECT_X, OBJECT_Y)
             print("You should see the raw transit now.")
+            if len(OBJECT_X) == 0:
+                wx.MessageBox("No data found, so that's somebody's problem.",
+                              'Problem!', wx.OK | wx.ICON_INFORMATION)
 
 
 class DataDisplayPanel(wx.Panel):
+    """
+    This is currently the big panel in the middle of the application.
+
+    This panel is the area used to visually display (probably via matplotlib)
+    the results of whatever operation needs the display.
+    """
 
     def __init__(self, parent):
         wx.Panel.__init__(self, parent=parent)
@@ -265,13 +330,21 @@ class DataDisplayPanel(wx.Panel):
 
     def force_update(self):
         global frame
-        # TODO: This isn't always forcing a redraw on some of my computers.
         self.canvas.draw()
         self.Layout()
+        # HACK: Hate doing this but I can't find a way around it.
         frame.force_update()
 
 
 class DataModifyPanel(wx.Panel):
+    """
+    This is currently the ugly mess on the right side that doesn't have any
+    sensible labels on it.
+
+    This panel is a messy container for inputs and buttons that modify the
+    data the display somehow.  There's really no clear outline for how this
+    area is going to work.  It's probably going to be messy for a long while.
+    """
 
     def __init__(self, parent, display_panel):
         wx.Panel.__init__(self, parent=parent)
@@ -356,8 +429,9 @@ class MainWindow(wx.Frame):
 
 
 if __name__ == '__main__':
-    load_kepler_id_from_db(6922244)
     # 10984090 A binary system
+    # load_kepler_id_from_db(6922244)
+    # print(get_accepted_result_kepid_list())
     app = wx.App()
     frame = MainWindow(parent=None, id=-1)
     frame.Show()
