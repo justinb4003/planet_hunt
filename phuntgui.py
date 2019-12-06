@@ -2,25 +2,24 @@
 import wx
 import functools
 import numpy as np
-import pandas as pd
 import sqlalchemy as sa
 
 from matplotlib.backends.backend_wxagg import FigureCanvasWxAgg as FigureCanvas
 from matplotlib.backends.backend_wxagg import NavigationToolbar2WxAgg as NavigationToolbar   # noqa
 from wx.lib.splitter import MultiSplitterWindow
 from matplotlib.figure import Figure
-from collections import namedtuple
 """
 from astropy import units as u
 from astropy.timeseries import TimeSeries
 from astropy.timeseries import BoxLeastSquares
 from astropy.timeseries import LombScargle
-"""
-from datetime import datetime, timedelta
 from contexttimer import Timer
-from math import isnan
+"""
 
-from lib.kdata_common import khello_world
+from phlib.kdata_common import get_result_tbl, get_sa_engine
+from phlib.kdata_common import load_kepler_id_from_db, NASAResult
+from phlib.kdata_common import get_accepted_result_from_db
+from phlib.kdata_common import connect as kdata_connect
 
 # Goober Algo
 """
@@ -35,12 +34,6 @@ Or that's how I'm visualizing it right now. - 2019-11-27
 
 
 # BEGIN DATA ROUTINES ###
-sa_engine = sa.create_engine(
-                'postgresql+psycopg2://kuser:kpass@localhost/kepler')
-metadata = sa.MetaData()
-NASAResult = namedtuple('NASAResult', 'kepoi_name kepler_name period '
-                                      'first_transit koi_disposition')
-
 OBJECT_X = []
 OBJECT_Y = []
 
@@ -48,71 +41,6 @@ OBJECT_Y = []
 def running_mean(d, N):
     cs = np.cumsum(np.insert(d, 0, 0))
     return (cs[N:] - cs[:-N]) / float(N)
-
-
-def get_sa_table(tblname):
-    tbl = sa.Table(tblname, metadata, autoload=True, autoload_with=sa_engine)
-    print(tbl)
-    return tbl
-
-
-def get_observation_tbl():
-    tbl = get_sa_table('observation_full')
-    return tbl
-
-
-def get_result_tbl():
-    return get_sa_table('nasa_result')
-
-
-def load_kepler_id_from_db(kepid):
-    """
-    Returns a list of time and list of raw light cuve intensitity (lc_init)
-    readings from the Kepler observations.
-
-    Doesn't offer any filtering on which quarter to pull from.  Perhaps it
-    should. At the least that data should filter back to the UI somehow.
-    That will be something for me to expand on shortly.
-    """
-    # TODO: Handle db reconnect if we timed out.
-    print("loading {}".format(kepid))
-    ot = get_observation_tbl()
-    cols = [ot.c.time_val, ot.c.lc_init]
-    where = ot.c.kepler_id == kepid
-    qry = sa.select(cols).select_from(ot).where(where)
-    print(qry)
-    with sa_engine.connect() as cur:
-        rs = cur.execute(qry).fetchall()
-    x = []
-    y = []
-    ts_time = []  # Not currently used. :(
-    print("found {} records".format(len(rs)))
-    for row in rs:
-        if not isnan(row.lc_init):
-            # Noon 2009-01-01, the start date for kepler data
-            ts = datetime(2009, 1, 1, 12, 0, 0)
-            ts += timedelta(days=row.time_val)
-            ts_time.append(ts)
-            x.append(row.time_val)
-            y.append(row.lc_init)
-    return x, y
-
-
-def get_accepted_result_from_db(kepid):
-    """
-    Returns a list of the accepted NASA findings for a given Kepler ID
-    """
-    rt = get_result_tbl()
-    where = rt.c.kepid == kepid
-    rq = sa.select([rt]).where(where)
-    with sa_engine.connect() as cur:
-        rs = cur.execute(rq).fetchall()
-    ret = []
-    for row in rs:
-        res = NASAResult(row.kepoi_name, row.kepler_name, row.koi_period,
-                         row.koi_time0bk, row.koi_disposition)
-        ret.append(res)
-    return ret
 
 
 @functools.lru_cache(maxsize=1)
@@ -125,7 +53,7 @@ def get_accepted_result_kepid_list():
     rt = get_result_tbl()
     cols = [rt.c.kepid]
     rq = sa.select(cols).select_from(rt).order_by(rt.c.kepid)
-    with sa_engine.connect() as cur:
+    with get_sa_engine().connect() as cur:
         rs = cur.execute(rq).fetchall()
     ret = []
     for row in rs:
@@ -436,7 +364,7 @@ if __name__ == '__main__':
     # 10984090 A binary system
     # load_kepler_id_from_db(6922244)
     # print(get_accepted_result_kepid_list())
-    khello_world()
+    kdata_connect()
     app = wx.App()
     frame = MainWindow(parent=None, id=-1)
     frame.Show()
