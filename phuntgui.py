@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 import wx
-import functools
 import numpy as np
-import sqlalchemy as sa
 
 from matplotlib.backends.backend_wxagg import FigureCanvasWxAgg as FigureCanvas
 from matplotlib.backends.backend_wxagg import NavigationToolbar2WxAgg as NavigationToolbar   # noqa
@@ -16,9 +14,9 @@ from astropy.timeseries import LombScargle
 from contexttimer import Timer
 """
 
-from phlib.kdata_common import get_result_tbl, get_sa_engine
-from phlib.kdata_common import load_kepler_id_from_db, NASAResult
+from phlib.kdata_common import load_kepler_id_from_db
 from phlib.kdata_common import get_accepted_result_from_db
+from phlib.kdata_common import get_accepted_result_kepid_list
 from phlib.kdata_common import connect as kdata_connect
 
 # Goober Algo
@@ -41,24 +39,6 @@ OBJECT_Y = []
 def running_mean(d, N):
     cs = np.cumsum(np.insert(d, 0, 0))
     return (cs[N:] - cs[:-N]) / float(N)
-
-
-@functools.lru_cache(maxsize=1)
-def get_accepted_result_kepid_list():
-    """
-    Return an ordered list of every Kepler ID that we've got in our
-    NASA result set.  Useful if you want to page through that data which is
-    exactly what I'm going to do with it.
-    """
-    rt = get_result_tbl()
-    cols = [rt.c.kepid]
-    rq = sa.select(cols).select_from(rt).order_by(rt.c.kepid)
-    with get_sa_engine().connect() as cur:
-        rs = cur.execute(rq).fetchall()
-    ret = []
-    for row in rs:
-        ret.append(row.kepid)
-    return ret
 
 
 # END DATA ROUTINES ###

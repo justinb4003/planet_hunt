@@ -2,6 +2,7 @@
 import sqlalchemy as sa
 
 from math import isnan
+from functools import lru_cache
 from collections import namedtuple
 from datetime import datetime, timedelta
 
@@ -18,33 +19,35 @@ NASAResult = namedtuple('NASAResult', 'kepoi_name kepler_name period '
 
 
 def connect():
-    global sa_engine, metadata
+    global sa_engine, metadata  # TODO: Still not sure I need this.
     sa_engine = sa.create_engine(
                     'postgresql+psycopg2://kuser:kpass@localhost/kepler')
     metadata = sa.MetaData()
 
 
+# Nobody's calling this anymore, but leaving it around anyway
+"""
 def get_sa_engine():
     return sa_engine
+"""
 
 
-def get_sa_table(tblname):
-    global sa_engine, metadata
+def _get_sa_table(tblname):
     tbl = sa.Table(tblname, metadata, autoload=True, autoload_with=sa_engine)
     print(tbl)
     return tbl
 
 
-def get_observation_tbl():
-    tbl = get_sa_table('observation_full')
+def _get_observation_tbl():
+    tbl = _get_sa_table('observation_full')
     return tbl
 
 
-def get_result_tbl():
-    return get_sa_table('nasa_result')
+def _get_result_tbl():
+    return _get_sa_table('nasa_result')
 
 
-def load_kepler_id_from_db(kepid):
+def get_lc_by_kepid(kepid):
     """
     Returns a list of time and list of raw light cuve intensitity (lc_init)
     readings from the Kepler observations.
@@ -53,10 +56,9 @@ def load_kepler_id_from_db(kepid):
     should. At the least that data should filter back to the UI somehow.
     That will be something for me to expand on shortly.
     """
-    global sa_engine, metadata
     # TODO: Handle db reconnect if we timed out.
     print("loading {}".format(kepid))
-    ot = get_observation_tbl()
+    ot = _get_observation_tbl()
     cols = [ot.c.time_val, ot.c.lc_init]
     where = ot.c.kepler_id == kepid
     qry = sa.select(cols).select_from(ot).where(where)
@@ -78,12 +80,14 @@ def load_kepler_id_from_db(kepid):
     return x, y
 
 
-def get_accepted_result_from_db(kepid):
+getlc = get_lc_by_kepid
+
+
+def get_result_list(kepid):
     """
     Returns a list of the accepted NASA findings for a given Kepler ID
     """
-    global sa_engine, metadata
-    rt = get_result_tbl()
+    rt = _get_result_tbl()
     where = rt.c.kepid == kepid
     rq = sa.select([rt]).where(where)
     with sa_engine.connect() as cur:
@@ -94,3 +98,24 @@ def get_accepted_result_from_db(kepid):
                          row.koi_time0bk, row.koi_disposition)
         ret.append(res)
     return ret
+
+
+@lru_cache(maxsize=1)
+def get_accepted_result_kepid_list():
+    """
+    Return an ordered list of every Kepler ID that we've got in our
+    NASA result set.  Useful if you want to page through that data which is
+    exactly what I'm going to do with it.
+    """
+    rt = _get_result_tbl()
+    cols = [rt.c.kepid]
+    rq = sa.select(cols).select_from(rt).order_by(rt.c.kepid)
+    with sa_engine.connect() as cur:
+        rs = cur.execute(rq).fetchall()
+    ret = []
+    for row in rs:
+        ret.append(row.kepid)
+    return ret
+
+
+getreslist = get_accepted_result_kepid_list
