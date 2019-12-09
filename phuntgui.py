@@ -14,8 +14,8 @@ from astropy.timeseries import LombScargle
 from contexttimer import Timer
 """
 
-from phlib.kdata_common import load_kepler_id_from_db
-from phlib.kdata_common import get_accepted_result_from_db
+from phlib.kdata_common import get_lc_by_kepid
+from phlib.kdata_common import get_result_list
 from phlib.kdata_common import get_accepted_result_kepid_list
 from phlib.kdata_common import connect as kdata_connect
 
@@ -186,8 +186,8 @@ class DataSearchPanel(wx.Panel):
         if kepid is not None:
             print("hit load_data().: {}".format(kepid))
             global OBJECT_X, OBJECT_Y
-            OBJECT_X, OBJECT_Y = load_kepler_id_from_db(kepid)
-            self.result_list = get_accepted_result_from_db(kepid)
+            OBJECT_X, OBJECT_Y = get_lc_by_kepid(kepid)
+            self.result_list = get_result_list(kepid)
             kep_choice = [r.kepoi_name for r in self.result_list]
             kep_choice.sort()
 

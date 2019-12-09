@@ -21,7 +21,7 @@ NASAResult = namedtuple('NASAResult', 'kepoi_name kepler_name period '
 def connect():
     global sa_engine, metadata  # TODO: Still not sure I need this.
     sa_engine = sa.create_engine(
-                    'postgresql+psycopg2://kuser:kpass@localhost/kepler')
+                    'postgresql+psycopg2://kuser:kpass@192.168.1.125/kepler')
     metadata = sa.MetaData()
 
 
@@ -80,9 +80,6 @@ def get_lc_by_kepid(kepid):
     return x, y
 
 
-getlc = get_lc_by_kepid
-
-
 def get_result_list(kepid):
     """
     Returns a list of the accepted NASA findings for a given Kepler ID
@@ -118,4 +115,7 @@ def get_accepted_result_kepid_list():
     return ret
 
 
+# Some shorcutnames to comon functions.
+# Basically here because I expect this to be used in an interpreter a lot
+getlc = get_lc_by_kepid
 getreslist = get_accepted_result_kepid_list
